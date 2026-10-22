@@ -1,4 +1,5 @@
-import {STATES,parseSnapshot,isFresh,canAct,makeCommand,mapLink,ageText,demoSnapshot} from './core.mjs';
+import {initVehicleControls,renderVehicle} from './vehicle.mjs?v=20261022-vehicle1';
+import {STATES,parseSnapshot,isFresh,canAct,makeCommand,mapLink,ageText,demoSnapshot} from './core.mjs?v=20261022-vehicle1';
 const $=id=>document.getElementById(id);
 const params=new URLSearchParams(location.search), scenario=params.get('demo');
 const demo=['normal','alert','stale','unknown','busy','history','error'].includes(scenario);
@@ -17,51 +18,77 @@ function notice(text,kind='') { $('notice').textContent=text; $('notice').classN
 function theme() { document.documentElement.dataset.theme=tg?.colorScheme==='light'?'light':'dark'; }
 theme(); tg?.onEvent?.('themeChanged',theme); tg?.ready?.(); tg?.expand?.();
 if(demo) $('demo').hidden=false;
-function roleLabel(role) { return role&1?'OWNER':role&2?'DRIVER':'CONTACT'; }
+function roleLabel(role) { return role&1?'CHỦ XE':role&2?'TÀI XẾ':'LIÊN HỆ'; }
 function renderControl() {
   const s=snapshot, fresh=isFresh(s), alert=[8,9].includes(s.fsm), expired=performance.now()-started>=120000;
   $('role').textContent=roleLabel(s.role); $('vehicle').textContent=s.vid;
-  $('timestamp').textContent=`Snapshot · ${ageText(s.epoch)}`;
+  $('timestamp').textContent=`Cập nhật · ${ageText(s.epoch)}`;
   $('hero').className=`card hero ${alert?'alert':''} ${fresh?'':'stale'}`;
   $('stateBadge').textContent=STATES[s.fsm]; $('stateBadge').className=`badge ${alert?'bad':fresh?'good':'warn'}`;
   $('signal').textContent=alert?'!':'◎';
-  $('headline').textContent=alert?'Your attention is needed.':s.fsm===1?'On the move.':s.fsm===0?'Starting up.':'Keeping watch.';
-  $('summary').textContent=alert?'Check the vehicle and the latest alert in chat.':s.fsm===1?'Photos are unavailable while driving.':s.fsm===7?'The vehicle is in standby. Scheduled patrol follows its current settings.':'Monitoring follows the vehicle’s current state and settings.';
+  $('headline').textContent=alert?'Có cảnh báo trên xe.':s.fsm===1?'Xe đang di chuyển.':s.fsm===0?'Đang khởi động.':'Đang theo dõi xe.';
+  $('summary').textContent=alert?'Kiểm tra xe và xem cảnh báo mới nhất trong cuộc trò chuyện.':s.fsm===1?'Chức năng chụp ảnh tạm khóa khi xe đang chạy.':s.fsm===7?'Xe đang ở chế độ chờ. Lượt kiểm tra định kỳ chạy theo cấu hình hiện tại.':'Thiết bị giám sát theo trạng thái và cấu hình của xe.';
   $('mode').textContent=s.mode?'ON':'AUTO'; $('ack').hidden=!alert; $('ackNote').hidden=!alert;
-  $('voltage').textContent=s.valid&2?`${(s.v_mv/1000).toFixed(2)} V`:'Unavailable';
-  $('radar').textContent=s.radar===0?'Powered off':s.valid&4?(['Powered off','No presence','Moving','Static','Moving + static'][s.radar]||'Unavailable'):'Unavailable';
-  $('distance').textContent=s.valid&4&&s.radar>1?`Distance ${s.distance} cm`:'';
-  $('ai').textContent=s.valid&16?`${s.cam_class===0?'Occupied':'Empty'} · ${s.cam_conf}%`:s.cam_status===1?'Check failed':'No result yet';
+  $('voltage').textContent=s.valid&2?`${(s.v_mv/1000).toFixed(2)} V`:'Chưa có dữ liệu';
+  $('radar').textContent=s.radar===0?'Đang tắt':s.valid&4?(['Đang tắt','Không phát hiện','Chuyển động','Đứng yên','Cả hai trạng thái'][s.radar]||'Chưa có dữ liệu'):'Chưa có dữ liệu';
+  $('distance').textContent=s.valid&4&&s.radar>1?`Khoảng cách ${s.distance} cm`:'';
+  $('ai').textContent=s.valid&16?`${s.cam_class===0?'Có người':'Không có người'} · ${s.cam_conf}%`:s.cam_status===1?'Phân tích thất bại':'Chưa có kết quả';
   $('aiAge').textContent=s.valid&16?`${s.stub?'SIMULATED · ':''}${ageText(s.cam_epoch)} · model score`:'';
-  $('gps').textContent=['Unavailable','Recent fix','Last known fix','Demo location'][s.loc_src];
+  $('gps').textContent=['Chưa có dữ liệu','Vị trí gần đây','Vị trí đã lưu','Vị trí mô phỏng'][s.loc_src];
   $('gpsAge').textContent=s.loc_src?ageText(s.loc_epoch):'';
-  $('driverStatus').textContent=s.role&2?'You are the current driver.':'Receive driver alerts by assigning yourself.';
+  $('driverStatus').textContent=s.role&2?'Bạn là tài xế hiện tại.':'Nhận cảnh báo ưu tiên bằng cách đăng ký làm tài xế.';
   $('drive').hidden=Boolean(s.role&2); $('modes').hidden=!(s.role&3);
   for(const b of document.querySelectorAll('[data-op]')) b.disabled=sent||(!canAct(s,b.dataset.op))||(expired&&b.dataset.op!=='r');
+  renderVehicle(s,sent,expired);
   if(!sent) {
-    if(!fresh||expired) notice('This snapshot is old or its time is unavailable. Refresh before taking action.','warn');
-    else if(!inTelegram&&!demo) notice('Open controls using the VODAS keyboard button inside Telegram.','warn');
+    if(!fresh||expired) notice('Dữ liệu đã cũ hoặc chưa có giờ đáng tin cậy. Lấy trạng thái mới trước khi thao tác.','warn');
+    else if(!inTelegram&&!demo) notice('Mở bằng nút VODAS trong bàn phím chat Telegram.','warn');
     else if(!demo) notice('');
   }
 }
 function ask(op,arg) {
   if(!snapshot||sent) return;
-  if(!canAct(snapshot,op)) { notice('This action is unavailable. Refresh your snapshot.','warn'); return; }
-  const labels={ack:['Acknowledge this alert?','This tells the contacts you received the alert. Monitoring continues; the vehicle is not confirmed safe.'],photo:['Request a new photo?','VODAS will capture a new scene and send the photo and AI result to this conversation.'],drv:['Become the current driver?','Driver alerts for this vehicle will be sent to you first.'],mode:['Change monitoring mode?',arg==='on'?'Start monitoring now using the existing vehicle rules.':'Return to AUTO, which follows the engine and motion signals. This does not switch off protection.']};
+  if(op==='cfg'&&arg?.startsWith('vcal=')&&snapshot.fsm!==7){notice('Chỉ hiệu chỉnh điện áp khi xe ở trạng thái chờ.','warn');return;}
+  if(!canAct(snapshot,op)) { notice('Chức năng chưa khả dụng. Gửi /app để lấy trạng thái mới.','warn'); return; }
+  const labels={ack:['Xác nhận đã nhận cảnh báo?','Các liên hệ sẽ biết bạn đã nhận cảnh báo. Thiết bị tiếp tục giám sát; xe chưa được xác nhận an toàn.'],photo:['Yêu cầu chụp ảnh mới?','VODAS chụp ảnh mới và gửi kèm kết quả AI vào cuộc trò chuyện này.'],drv:['Đăng ký làm tài xế?','Bạn sẽ được ưu tiên nhận cảnh báo dành cho tài xế của xe này.'],mode:['Thay đổi chế độ giám sát?',arg==='on'?'Bắt đầu giám sát ngay theo quy trình đã cài đặt.':'Chuyển sang AUTO, theo tín hiệu động cơ và chuyển động. Xe vẫn được bảo vệ theo cấu hình.']};
+  Object.assign(labels,{
+    cfg:['Lưu cấu hình thiết bị?','Thiết bị kiểm tra giá trị và trả kết quả trong chat.'],
+    contact:['Lưu liên hệ cảnh báo?','Tên, số điện thoại và Telegram ID bạn nhập sẽ thay thế thông tin tại vị trí đã chọn. Các giá trị đang để trống được xử lý theo hướng dẫn của biểu mẫu.'],
+    del:['Xóa liên hệ này?',`Liên hệ số ${arg} sẽ ngừng nhận cảnh báo và mất quyền điều khiển xe.`],
+    driver:['Chỉ định tài xế?',`Chọn liên hệ số ${arg} đã có trong danh bạ làm tài xế hiện tại.`],
+    led:['Bắt đầu kiểm tra LED?','Vòng LED trên xe sẽ chạy phép thử ngắn rồi tự trở về hiệu ứng thông thường.'],
+    buzz:['Bắt đầu thử còi?','Còi trên xe sẽ phát âm thanh trong khoảng 3 giây.'],
+    radar:['Quét thử radar?','Radar sẽ quét trong 10 giây. Sau đó gửi /app để lấy trạng thái mới. Chỉ thực hiện khi xe đang chờ và không trong một lượt giám sát.']
+  });
+  if(op==='cfg') {
+    const [key,value]=arg.split('=');
+    const volts=n=>`${(Number(n)/1000).toFixed(2)} V`;
+    if(key==='vth') { const [on,off,low]=value.split(','); labels.cfg[1]=`Bật máy: ${volts(on)}\nTắt máy: ${volts(off)}\nẮc quy yếu: ${volts(low)}\nLưu cả ba ngưỡng trên xe.`; }
+    if(key==='vprofile') labels.cfg[1]=`Chọn xe ${value} V và thay cả ba ngưỡng điện bằng bộ mặc định tương ứng.`;
+    if(key==='vid') labels.cfg[1]=`Đổi mã xe hiển thị thành ${value}.`;
+    if(key==='vcal') labels.cfg[1]=`Dùng số đo thực tế ${volts(value)} để hiệu chỉnh điện áp của thiết bị.`;
+    if(key==='buzzer') labels.cfg[1]=value==='off'?'Tắt âm thanh của còi trên xe.':'Bật lại âm thanh của còi cảnh báo trên xe.';
+  }
+  if(op==='contact') {
+    const [slot,chat,phone,name]=arg.split(',');
+    const decoded=new TextDecoder().decode(Uint8Array.from(atob(name.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0)));
+    labels.contact[1]=`Liên hệ số ${slot}: ${decoded}\nSố điện thoại: ${phone==='-'?'xóa số hiện có':phone}\nTelegram ID: ${chat==='0'?'giữ ID hiện có (nếu đã lưu)':chat}`;
+  }
   if(!labels[op]) { send(op,arg); return; }
   pendingAction={op,arg}; $('confirmTitle').textContent=labels[op][0]; $('confirmText').textContent=labels[op][1]; $('confirm').showModal();
 }
 function send(op,arg) {
   if(sent||!snapshot) return;
-  if(!canAct(snapshot,op)||(performance.now()-started>=120000&&op!=='r')) { notice('Session expired. Return to chat and send /app.','warn'); return; }
+  if(!canAct(snapshot,op)||(performance.now()-started>=120000&&op!=='r')) { notice('Phiên đã hết hạn. Trở về chat và gửi /app.','warn'); return; }
   if(demo) { notice(`Preview: ${op==='r'?'a fresh snapshot':op==='photo'?'a photo':op==='ack'?'an acknowledgement':'this action'} would be requested. No command was sent.`); return; }
-  if(!inTelegram||tg.initData||typeof tg.sendData!=='function') { notice('Open controls from the keyboard button after sending /app, not from the bot Menu.','warn'); return; }
+  if(!inTelegram||tg.initData||typeof tg.sendData!=='function') { notice('Gửi /app rồi mở bằng nút điều khiển trong bàn phím chat Telegram.','warn'); return; }
   try {
     const random=new Uint32Array(1); crypto.getRandomValues(random);
     const command=makeCommand(snapshot,op,arg,random[0].toString(16).padStart(8,'0'));
-    sent=true; renderControl(); notice('Sending request. VODAS will reply in this conversation.'); tg.sendData(command);
-  } catch { sent=false; renderControl(); notice('The request could not be sent. Return to chat and try /app again.','error'); }
+    sent=true; renderControl(); notice('Đang gửi yêu cầu. VODAS sẽ trả kết quả trong cuộc trò chuyện.'); tg.sendData(command);
+  } catch { sent=false; renderControl(); notice('Chưa gửi được yêu cầu. Trở về chat và gửi /app để thử lại.','error'); }
 }
+initVehicleControls(ask,notice);
 for(const button of document.querySelectorAll('[data-op]')) button.addEventListener('click',()=>ask(button.dataset.op,button.dataset.arg));
 $('cancel').onclick=()=>$('confirm').close();
 $('proceed').onclick=()=>{ $('confirm').close(); if(pendingAction) send(pendingAction.op,pendingAction.arg); pendingAction=null; };
